@@ -652,7 +652,7 @@ const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
   PointerDeviceKind.unknown,
 };
 
-const double _kChangeChapterOffset = 160;
+const double _kChangeChapterOffset = 100;
 
 class _ContinuousMode extends StatefulWidget {
   const _ContinuousMode({super.key});

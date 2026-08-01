@@ -30,7 +30,7 @@ def keystoreProperties = new Properties()
 keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 
 android {
-    namespace = "com.github.wgh136.venera"
+    namespace = "com.github.skyline34.venera"
     compileSdk = flutter.compileSdkVersion
     ndkVersion "28.0.13004108"
 
@@ -73,7 +73,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.github.wgh136.venera"
+        applicationId = "com.github.skyline34.venera"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
         minSdk = flutter.minSdkVersion
@@ -107,11 +107,11 @@ android {
                     outputFileName = "venera-${variant.versionName}-${abi}.apk"
                     def abiVersionCode = project.ext.abiCodes.get(abi)
                     if (abiVersionCode != null) {
-                        versionCodeOverride = variant.versionCode * 10 + abiVersionCode
+                        versionCodeOverride = variant.versionCode * 10 + 100 + abiVersionCode
                     }
                 } else {
                     outputFileName = "venera-${variant.versionName}.apk"
-                    versionCodeOverride = variant.versionCode * 10
+                    versionCodeOverride = variant.versionCode * 10 + 100
                 }
             } else if (variant.buildType.name == "debug") {
                 versionCodeOverride = variant.versionCode * 10 + 4
