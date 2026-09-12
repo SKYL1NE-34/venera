@@ -1,6 +1,11 @@
 # Due to my limited time and energy, this project is no longer maintained. Feel free to fork it.
 # 由于本人精力有限, 此项目已停止维护, 欢迎fork
 
+> **非官方分支（Unofficial fork）** — 本仓库是
+> [venera-app/venera](https://github.com/venera-app/venera)（GPL-3.0）的分支，
+> 由 [SKYL1NE-34](https://github.com/SKYL1NE-34) 维护。
+> 本分支的改动见 [CHANGELOG.md](CHANGELOG.md)。
+>
 > **Unofficial fork** — this repository is a fork of
 > [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0),
 > maintained by [SKYL1NE-34](https://github.com/SKYL1NE-34).

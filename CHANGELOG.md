@@ -1,11 +1,36 @@
-# Changelog
+# 更新日志 / Changelog
 
-All notable changes to this fork are documented in this file.
-
-This project is an unofficial fork of
-[venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0).
+> 本仓库是 [venera-app/venera](https://github.com/venera-app/venera)（GPL-3.0）的非官方分支，本文件记录本分支的所有重要改动。
+>
+> This repository is an unofficial fork of [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0). All notable changes to this fork are documented in this file.
 
 ## [1.6.4] - 2026-09-13
+
+### 新增
+
+- 本地下载：虚拟分类文件夹（新建 / 重命名 / 删除）
+- 本地下载：整理模式，可拖动排序分类与漫画，也可把漫画拖到分类上归类
+- 本地下载：新增"自定义"排序，按每本漫画的手动顺序排列
+- 本地下载：未分类标题可点击，进入未分类页面
+
+### 变更
+
+- 更名为 **Venera Air**（Android 应用名）；APK 文件名改为 `venera-air-<版本>[-<abi>].apk`
+- 关于页：GitHub 与"检查更新"链接指向本分支；移除 Telegram 链接
+- 本地下载：文案由"文件夹"改为"分类"
+
+### 修复
+
+- 本地下载：排序弹窗未应用所选顺序
+- 本地下载：名称排序改为升序（A→Z）
+- 本地下载：整理模式下封面条尺寸不再变化
+- 图片加载：对瞬时空数据（例如文件正在写入）进行重试，而不是直接报 "Empty image data"
+
+### 说明
+
+- 首次启动会自动迁移 `local.db`：`comics` 表新增 `folder`、`display_order` 列，并新建 `folders` 表；原有数据保留
+
+---
 
 ### Added
 
