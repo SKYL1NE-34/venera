@@ -65,13 +65,26 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
 
       Uint8List? data;
 
+      // Empty responses are usually transient (e.g. a file that is still
+      // being written). Retry a couple of times quickly before backing off.
+      int emptyRetries = 0;
+
       while (data == null && !stop) {
         try {
-          data = await load(chunkEvents, () {
+          var result = await load(chunkEvents, () {
             if (stop) {
               throw const _ImageLoadingStopException();
             }
           });
+          if (result.isEmpty) {
+            if (emptyRetries < 2) {
+              emptyRetries++;
+              await Future.delayed(const Duration(milliseconds: 150));
+              continue;
+            }
+            throw Exception("Empty image data");
+          }
+          data = result;
         } on _ImageLoadingStopException {
           rethrow;
         } catch (e) {

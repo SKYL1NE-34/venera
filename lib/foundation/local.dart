@@ -49,6 +49,12 @@ class LocalComic with HistoryMixin implements Comic {
 
   final DateTime createdAt;
 
+  /// The virtual folder this comic belongs to. Empty string means uncategorized.
+  final String folder;
+
+  /// Manual display order within [folder] when sorting by [LocalSortType.custom].
+  final int displayOrder;
+
   const LocalComic({
     required this.id,
     required this.title,
@@ -60,19 +66,26 @@ class LocalComic with HistoryMixin implements Comic {
     required this.comicType,
     required this.downloadedChapters,
     required this.createdAt,
+    this.folder = '',
+    this.displayOrder = 0,
   });
 
   LocalComic.fromRow(Row row)
-      : id = row[0] as String,
-        title = row[1] as String,
-        subtitle = row[2] as String,
-        tags = List.from(jsonDecode(row[3] as String)),
-        directory = row[4] as String,
-        chapters = ComicChapters.fromJsonOrNull(jsonDecode(row[5] as String)),
-        cover = row[6] as String,
-        comicType = ComicType(row[7] as int),
-        downloadedChapters = List.from(jsonDecode(row[8] as String)),
-        createdAt = DateTime.fromMillisecondsSinceEpoch(row[9] as int);
+      : id = row['id'] as String,
+        title = row['title'] as String,
+        subtitle = row['subtitle'] as String,
+        tags = List.from(jsonDecode(row['tags'] as String)),
+        directory = row['directory'] as String,
+        chapters =
+            ComicChapters.fromJsonOrNull(jsonDecode(row['chapters'] as String)),
+        cover = row['cover'] as String,
+        comicType = ComicType(row['comic_type'] as int),
+        downloadedChapters =
+            List.from(jsonDecode(row['downloadedChapters'] as String)),
+        createdAt =
+            DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        folder = (row['folder'] as String?) ?? '',
+        displayOrder = (row['display_order'] as int?) ?? 0;
 
   File get coverFile => File(FilePath.join(
         baseDir,
@@ -274,7 +287,16 @@ class LocalManager with ChangeNotifier {
         comic_type INTEGER NOT NULL,
         downloadedChapters TEXT NOT NULL,
         created_at INTEGER,
+        folder TEXT NOT NULL DEFAULT '',
+        display_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (id, comic_type)
+      );
+    ''');
+    migrateComicsTable(_db);
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS folders (
+        name TEXT PRIMARY KEY,
+        order_value INTEGER NOT NULL
       );
     ''');
     if (File(FilePath.join(App.dataPath, 'local_path')).existsSync()) {
@@ -298,6 +320,31 @@ class LocalManager with ChangeNotifier {
     restoreDownloadingTasks();
   }
 
+  /// Adds the [folder] / [display_order] columns to old databases.
+  /// Idempotent: only alters when a column is missing.
+  static void migrateComicsTable(Database db) {
+    final columns = db
+        .select('PRAGMA table_info(comics);')
+        .map((row) => row['name'] as String)
+        .toSet();
+    var added = false;
+    if (!columns.contains('folder')) {
+      db.execute(
+          "ALTER TABLE comics ADD COLUMN folder TEXT NOT NULL DEFAULT '';");
+      added = true;
+    }
+    if (!columns.contains('display_order')) {
+      db.execute(
+          'ALTER TABLE comics ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0;');
+      added = true;
+    }
+    if (added) {
+      // Initialize manual order from creation time so the first custom sort is stable.
+      db.execute(
+          'UPDATE comics SET display_order = created_at WHERE display_order = 0;');
+    }
+  }
+
   String findValidId(ComicType type) {
     final res = _db.select(
       '''
@@ -314,15 +361,27 @@ class LocalManager with ChangeNotifier {
   }
 
   Future<void> add(LocalComic comic, [String? id]) async {
-    var old = find(id ?? comic.id, comic.comicType);
+    var targetId = id ?? comic.id;
+    var old = find(targetId, comic.comicType);
     var downloaded = comic.downloadedChapters;
+    var folder = comic.folder;
+    var displayOrder = comic.displayOrder;
     if (old != null) {
       downloaded.addAll(old.downloadedChapters);
+      // Updates (re-download / chapter refresh) must never move a comic
+      // between folders or reset its manual order.
+      folder = old.folder;
+      displayOrder = old.displayOrder;
+    } else {
+      displayOrder = nextDisplayOrder(folder);
     }
     _db.execute(
-      'INSERT OR REPLACE INTO comics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
+      'INSERT OR REPLACE INTO comics '
+      '(id, title, subtitle, tags, directory, chapters, cover, comic_type, '
+      'downloadedChapters, created_at, folder, display_order) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
       [
-        id ?? comic.id,
+        targetId,
         comic.title,
         comic.subtitle,
         jsonEncode(comic.tags),
@@ -332,9 +391,21 @@ class LocalManager with ChangeNotifier {
         comic.comicType.value,
         jsonEncode(downloaded),
         comic.createdAt.millisecondsSinceEpoch,
+        folder,
+        displayOrder,
       ],
     );
     notifyListeners();
+  }
+
+  /// The display order to assign to a comic appended to [folder].
+  int nextDisplayOrder(String folder) {
+    final res = _db.select(
+      'SELECT MAX(display_order) FROM comics WHERE folder = ?;',
+      [folder],
+    );
+    var max = res.first[0];
+    return max == null ? 0 : (max as int) + 1;
   }
 
   void remove(String id, ComicType comicType) async {
@@ -350,14 +421,31 @@ class LocalManager with ChangeNotifier {
     notifyListeners();
   }
 
+  String _orderByClause(LocalSortType sortType) {
+    switch (sortType) {
+      case LocalSortType.name:
+        return 'title ASC';
+      case LocalSortType.timeAsc:
+        return 'created_at ASC';
+      case LocalSortType.timeDesc:
+        return 'created_at DESC';
+      case LocalSortType.custom:
+        return 'display_order ASC, created_at ASC';
+    }
+  }
+
   List<LocalComic> getComics(LocalSortType sortType) {
-    var res = _db.select('''
-      SELECT * FROM comics
-      ORDER BY
-        ${sortType.value == 'name' ? 'title' : 'created_at'}
-        ${sortType.value == 'time_asc' ? 'ASC' : 'DESC'}
-      ;
-    ''');
+    var res = _db.select(
+        'SELECT * FROM comics ORDER BY ${_orderByClause(sortType)};');
+    return res.map((row) => LocalComic.fromRow(row)).toList();
+  }
+
+  /// Comics that belong to [folder]. Empty string means uncategorized.
+  List<LocalComic> getFolderComics(String folder, LocalSortType sortType) {
+    var res = _db.select(
+      'SELECT * FROM comics WHERE folder = ? ORDER BY ${_orderByClause(sortType)};',
+      [folder],
+    );
     return res.map((row) => LocalComic.fromRow(row)).toList();
   }
 
@@ -412,6 +500,161 @@ class LocalManager with ChangeNotifier {
       ORDER BY created_at DESC;
     ''', ['%$keyword%', '%$keyword%', '%$keyword%']);
     return res.map((row) => LocalComic.fromRow(row)).toList();
+  }
+
+  static const String uncategorizedFolder = '';
+
+  /// All folders, uncategorized pinned first, then by user order.
+  List<String> getFolders() {
+    final res =
+        _db.select('SELECT name FROM folders ORDER BY order_value ASC;');
+    return [
+      uncategorizedFolder,
+      ...res.map((row) => row['name'] as String),
+    ];
+  }
+
+  bool folderExists(String name) {
+    if (name == uncategorizedFolder) {
+      return true;
+    }
+    final res = _db.select('SELECT 1 FROM folders WHERE name = ?;', [name]);
+    return res.isNotEmpty;
+  }
+
+  int countInFolder(String folder) {
+    final res = _db.select(
+      'SELECT COUNT(*) FROM comics WHERE folder = ?;',
+      [folder],
+    );
+    return res.first[0] as int;
+  }
+
+  void createFolder(String name) {
+    name = name.trim();
+    if (name.isEmpty || folderExists(name)) {
+      return;
+    }
+    final res = _db.select('SELECT MAX(order_value) FROM folders;');
+    var max = res.first[0];
+    _db.execute(
+      'INSERT INTO folders (name, order_value) VALUES (?, ?);',
+      [name, max == null ? 0 : (max as int) + 1],
+    );
+    notifyListeners();
+  }
+
+  void renameFolder(String oldName, String newName) {
+    newName = newName.trim();
+    if (oldName == uncategorizedFolder ||
+        newName.isEmpty ||
+        newName == uncategorizedFolder ||
+        newName == oldName ||
+        folderExists(newName)) {
+      return;
+    }
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      _db.execute(
+        'UPDATE comics SET folder = ? WHERE folder = ?;',
+        [newName, oldName],
+      );
+      _db.execute(
+        'UPDATE folders SET name = ? WHERE name = ?;',
+        [newName, oldName],
+      );
+    } catch (e, s) {
+      _db.execute('ROLLBACK;');
+      Log.error("LocalManager", "Failed to rename folder: $e", s);
+      return;
+    }
+    _db.execute('COMMIT;');
+    notifyListeners();
+  }
+
+  /// Deletes a folder. Its comics are moved back to uncategorized.
+  void deleteFolder(String name) {
+    if (name == uncategorizedFolder) {
+      return;
+    }
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      _db.execute(
+        'UPDATE comics SET folder = ? WHERE folder = ?;',
+        [uncategorizedFolder, name],
+      );
+      _db.execute('DELETE FROM folders WHERE name = ?;', [name]);
+    } catch (e, s) {
+      _db.execute('ROLLBACK;');
+      Log.error("LocalManager", "Failed to delete folder: $e", s);
+      return;
+    }
+    _db.execute('COMMIT;');
+    notifyListeners();
+  }
+
+  /// Moves [comics] into [folder], appending them after existing comics.
+  void moveComicsToFolder(List<LocalComic> comics, String folder) {
+    if (comics.isEmpty) {
+      return;
+    }
+    var order = nextDisplayOrder(folder);
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      for (var c in comics) {
+        _db.execute(
+          'UPDATE comics SET folder = ?, display_order = ? '
+          'WHERE id = ? AND comic_type = ?;',
+          [folder, order, c.id, c.comicType.value],
+        );
+        order++;
+      }
+    } catch (e, s) {
+      _db.execute('ROLLBACK;');
+      Log.error("LocalManager", "Failed to move comics: $e", s);
+      return;
+    }
+    _db.execute('COMMIT;');
+    notifyListeners();
+  }
+
+  /// Persists the manual order of [comics] as their index.
+  void reorderComics(List<LocalComic> comics) {
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      for (var i = 0; i < comics.length; i++) {
+        _db.execute(
+          'UPDATE comics SET display_order = ? WHERE id = ? AND comic_type = ?;',
+          [i, comics[i].id, comics[i].comicType.value],
+        );
+      }
+    } catch (e, s) {
+      _db.execute('ROLLBACK;');
+      Log.error("LocalManager", "Failed to reorder comics: $e", s);
+      return;
+    }
+    _db.execute('COMMIT;');
+    notifyListeners();
+  }
+
+  /// Persists the order of [folders]. Uncategorized is ignored (always pinned).
+  void reorderFolders(List<String> folders) {
+    var real = folders.where((e) => e != uncategorizedFolder).toList();
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      for (var i = 0; i < real.length; i++) {
+        _db.execute(
+          'UPDATE folders SET order_value = ? WHERE name = ?;',
+          [i, real[i]],
+        );
+      }
+    } catch (e, s) {
+      _db.execute('ROLLBACK;');
+      Log.error("LocalManager", "Failed to reorder folders: $e", s);
+      return;
+    }
+    _db.execute('COMMIT;');
+    notifyListeners();
   }
 
   Future<List<String>> getImages(String id, ComicType type, Object ep) async {
@@ -692,7 +935,8 @@ class LocalManager with ChangeNotifier {
 enum LocalSortType {
   name("name"),
   timeAsc("time_asc"),
-  timeDesc("time_desc");
+  timeDesc("time_desc"),
+  custom("custom");
 
   final String value;
 

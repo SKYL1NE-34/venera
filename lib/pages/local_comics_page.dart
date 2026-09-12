@@ -1,20 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_reorderable_grid_view/widgets/widgets.dart';
 import 'package:venera/components/components.dart';
 import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
-import 'package:venera/foundation/comic_type.dart';
+import 'package:venera/foundation/image_provider/local_comic_image.dart';
 import 'package:venera/foundation/local.dart';
-import 'package:venera/foundation/log.dart';
-import 'package:venera/pages/comic_details_page/comic_page.dart';
 import 'package:venera/pages/downloading_page.dart';
-import 'package:venera/pages/favorites/favorites_page.dart';
-import 'package:venera/utils/cbz.dart';
-import 'package:venera/utils/epub.dart';
-import 'package:venera/utils/io.dart';
-import 'package:venera/utils/pdf.dart';
+import 'package:venera/pages/local_common.dart';
+import 'package:venera/pages/local_folder_page.dart';
 import 'package:venera/utils/translations.dart';
-import 'package:zip_flutter/zip_flutter.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 class LocalComicsPage extends StatefulWidget {
   const LocalComicsPage({super.key});
@@ -24,35 +18,55 @@ class LocalComicsPage extends StatefulWidget {
 }
 
 class _LocalComicsPageState extends State<LocalComicsPage> {
-  late List<LocalComic> comics;
+  List<String> folders = [];
+  Map<String, List<LocalComic>> folderComics = {};
+  List<LocalComic> uncategorized = [];
+  List<LocalComic> searchResults = [];
 
   late LocalSortType sortType;
 
   String keyword = "";
-
   bool searchMode = false;
 
   bool multiSelectMode = false;
-
   Map<LocalComic, bool> selectedComics = {};
 
+  bool arrangeMode = false;
+
+  /// Set when a comic is dropped onto another container so the source
+  /// reorder callback is skipped.
+  bool _skipNextReorder = false;
+
+  final _uncatGridKey = GlobalKey();
+
+  final _scrollController = ScrollController();
+
+  List<LocalComic> get currentComics =>
+      searchMode ? searchResults : uncategorized;
+
   void update() {
-    if (keyword.isEmpty) {
-      setState(() {
-        comics = LocalManager().getComics(sortType);
-      });
-    } else {
-      setState(() {
-        comics = LocalManager().search(keyword);
-      });
-    }
+    setState(() {
+      var allFolders = LocalManager().getFolders();
+      folders = allFolders
+          .where((e) => e != LocalManager.uncategorizedFolder)
+          .toList();
+      folderComics = {
+        for (var folder in folders)
+          folder: LocalManager().getFolderComics(folder, sortType),
+      };
+      uncategorized = LocalManager()
+          .getFolderComics(LocalManager.uncategorizedFolder, sortType);
+      if (keyword.isNotEmpty) {
+        searchResults = LocalManager().search(keyword);
+      }
+    });
   }
 
   @override
   void initState() {
     var sort = appdata.implicitData["local_sort"] ?? "name";
     sortType = LocalSortType.fromString(sort);
-    comics = LocalManager().getComics(sortType);
+    update();
     LocalManager().addListener(update);
     super.initState();
   }
@@ -60,107 +74,36 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
   @override
   void dispose() {
     LocalManager().removeListener(update);
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void sort() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(builder: (context, setState) {
-          return ContentDialog(
-            title: "Sort".tl,
-            content: RadioGroup<LocalSortType>(
-              groupValue: sortType,
-              onChanged: (v) {
-                setState(() {
-                  sortType = v ?? sortType;
-                });
-              },
-              child: Column(
-                children: [
-                  RadioListTile<LocalSortType>(
-                    title: Text("Name".tl),
-                    value: LocalSortType.name,
-                  ),
-                  RadioListTile<LocalSortType>(
-                    title: Text("Date".tl),
-                    value: LocalSortType.timeAsc,
-                  ),
-                  RadioListTile<LocalSortType>(
-                    title: Text("Date Desc".tl),
-                    value: LocalSortType.timeDesc,
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              FilledButton(
-                onPressed: () {
-                  appdata.implicitData["local_sort"] = sortType.value;
-                  appdata.writeImplicitData();
-                  Navigator.pop(context);
-                  update();
-                },
-                child: Text("Confirm".tl),
-              ),
-            ],
-          );
-        });
-      },
-    );
+  void enterArrange() {
+    sortType = LocalSortType.custom;
+    appdata.implicitData["local_sort"] = sortType.value;
+    appdata.writeImplicitData();
+    setState(() {
+      arrangeMode = true;
+    });
+    update();
   }
 
-  Widget buildMultiSelectMenu() {
-    return MenuButton(entries: [
-      MenuEntry(
-        icon: Icons.delete_outline,
-        text: "Delete".tl,
-        onClick: () {
-          deleteComics(selectedComics.keys.toList()).then((value) {
-            if (value) {
-              setState(() {
-                multiSelectMode = false;
-                selectedComics.clear();
-              });
-            }
-          });
-        },
-      ),
-      MenuEntry(
-        icon: Icons.favorite_border,
-        text: "Add to favorites".tl,
-        onClick: () {
-          addFavorite(selectedComics.keys.toList());
-        },
-      ),
-      if (selectedComics.length == 1)
-        MenuEntry(
-          icon: Icons.folder_open,
-          text: "Open Folder".tl,
-          onClick: () {
-            openComicFolder(selectedComics.keys.first);
-          },
-        ),
-      if (selectedComics.length == 1)
-        MenuEntry(
-          icon: Icons.chrome_reader_mode_outlined,
-          text: "View Detail".tl,
-          onClick: () {
-            context.to(() => ComicPage(
-                  id: selectedComics.keys.first.id,
-                  sourceKey: selectedComics.keys.first.sourceKey,
-                ));
-          },
-        ),
-      if (selectedComics.isNotEmpty)
-        ...exportActions(selectedComics.keys.toList()),
-    ]);
+  void exitMultiSelect() {
+    setState(() {
+      multiSelectMode = false;
+      selectedComics.clear();
+    });
+  }
+
+  void exitArrange() {
+    setState(() {
+      arrangeMode = false;
+    });
   }
 
   void selectAll() {
     setState(() {
-      selectedComics = comics.asMap().map((k, v) => MapEntry(v, true));
+      selectedComics = currentComics.asMap().map((k, v) => MapEntry(v, true));
     });
   }
 
@@ -172,11 +115,39 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
 
   void invertSelection() {
     setState(() {
-      comics.asMap().forEach((k, v) {
+      currentComics.asMap().forEach((k, v) {
         selectedComics[v] = !selectedComics.putIfAbsent(v, () => false);
       });
       selectedComics.removeWhere((k, v) => !v);
     });
+  }
+
+  void _persistReorder(List<LocalComic> list) {
+    if (_skipNextReorder) {
+      _skipNextReorder = false;
+      return;
+    }
+    LocalManager().reorderComics(list);
+  }
+
+  void _moveToFolder(LocalComic comic, String folder) {
+    _skipNextReorder = true;
+    LocalManager().moveComicsToFolder([comic], folder);
+  }
+
+  Widget buildMultiSelectMenu() {
+    return MenuButton(entries: [
+      ...multiLocalComicMenu(
+        context,
+        selectedComics.keys.toList(),
+        () {
+          setState(() {
+            multiSelectMode = false;
+            selectedComics.clear();
+          });
+        },
+      ),
+    ]);
   }
 
   @override
@@ -213,7 +184,12 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
         message: "Sort".tl,
         child: IconButton(
           icon: const Icon(Icons.sort),
-          onPressed: sort,
+          onPressed: () {
+            showLocalSortDialog(context, sortType, (v) {
+              sortType = v;
+              update();
+            });
+          },
         ),
       ),
       Tooltip(
@@ -225,143 +201,346 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
           },
         ),
       ),
+      Tooltip(
+        message: "Arrange".tl,
+        child: IconButton(
+          icon: const Icon(Icons.dashboard_customize_outlined),
+          onPressed: enterArrange,
+        ),
+      ),
+    ];
+
+    List<Widget> arrangeActions = [
+      Tooltip(
+        message: "Help".tl,
+        child: IconButton(
+          icon: const Icon(Icons.help_outline),
+          onPressed: () {
+            showInfoDialog(
+              context: context,
+              title: "Arrange".tl,
+              content: "Long press and drag to reorder.".tl,
+            );
+          },
+        ),
+      ),
+      TextButton(
+        onPressed: exitArrange,
+        child: Text("Done".tl),
+      ),
     ];
 
     var body = Scaffold(
-      body: SmoothCustomScrollView(
-        slivers: [
-          if (!searchMode)
-            SliverAppbar(
-              leading: Tooltip(
-                message: multiSelectMode ? "Cancel".tl : "Back".tl,
-                child: IconButton(
-                  onPressed: () {
-                    if (multiSelectMode) {
-                      setState(() {
-                        multiSelectMode = false;
-                        selectedComics.clear();
-                      });
-                    } else {
-                      context.pop();
-                    }
-                  },
-                  icon: multiSelectMode
-                      ? const Icon(Icons.close)
-                      : const Icon(Icons.arrow_back),
-                ),
-              ),
-              title: multiSelectMode
-                  ? Text(selectedComics.length.toString())
-                  : Text("Local".tl),
-              actions: multiSelectMode ? selectActions : normalActions,
+      floatingActionButton: (!searchMode && !multiSelectMode && !arrangeMode)
+          ? FloatingActionButton(
+              tooltip: "New Category".tl,
+              onPressed: () async {
+                var name = await showCreateFolderDialog(context);
+                if (name != null) {
+                  setState(() {});
+                }
+              },
+              child: const Icon(Icons.create_new_folder_outlined),
             )
-          else if (searchMode)
-            SliverAppbar(
-              leading: Tooltip(
-                message: multiSelectMode ? "Cancel".tl : "Cancel".tl,
-                child: IconButton(
-                  icon: multiSelectMode
-                      ? const Icon(Icons.close)
-                      : const Icon(Icons.close),
-                  onPressed: () {
-                    if (multiSelectMode) {
-                      setState(() {
-                        multiSelectMode = false;
-                        selectedComics.clear();
-                      });
-                    } else {
-                      setState(() {
-                        searchMode = false;
-                        keyword = "";
-                        update();
-                      });
-                    }
+          : null,
+      body: DragAutoScroller(
+        controller: _scrollController,
+        child: SmoothCustomScrollView(
+          controller: _scrollController,
+          slivers: [
+          SliverAppbar(
+            leading: Tooltip(
+              message: multiSelectMode || arrangeMode ? "Cancel".tl : "Back".tl,
+              child: IconButton(
+                onPressed: () {
+                  if (multiSelectMode) {
+                    exitMultiSelect();
+                  } else if (arrangeMode) {
+                    exitArrange();
+                  } else if (searchMode) {
+                    setState(() {
+                      searchMode = false;
+                      keyword = "";
+                      update();
+                    });
+                  } else {
+                    context.pop();
+                  }
+                },
+                icon: (multiSelectMode || arrangeMode)
+                    ? const Icon(Icons.close)
+                    : const Icon(Icons.arrow_back),
+              ),
+            ),
+            title: multiSelectMode
+                ? Text(selectedComics.length.toString())
+                : Text("Local".tl),
+            actions: multiSelectMode
+                ? selectActions
+                : (arrangeMode
+                    ? arrangeActions
+                    : (searchMode ? [] : normalActions)),
+          ),
+          if (searchMode)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: "Search".tl,
+                    border: InputBorder.none,
+                  ),
+                  onChanged: (v) {
+                    keyword = v;
+                    update();
                   },
                 ),
               ),
-              title: multiSelectMode
-                  ? Text(selectedComics.length.toString())
-                  : TextField(
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        hintText: "Search".tl,
-                        border: InputBorder.none,
+            ),
+          if (searchMode)
+            SliverGridComics(
+              comics: searchResults,
+              selections: multiSelectMode ? selectedComics : null,
+              onLongPressed: (c, heroID) {
+                setState(() {
+                  multiSelectMode = true;
+                  selectedComics[c as LocalComic] = true;
+                });
+              },
+              onTap: (c, heroID) {
+                if (multiSelectMode) {
+                  setState(() {
+                    if (selectedComics.containsKey(c as LocalComic)) {
+                      selectedComics.remove(c);
+                    } else {
+                      selectedComics[c] = true;
+                    }
+                    if (selectedComics.isEmpty) {
+                      multiSelectMode = false;
+                    }
+                  });
+                } else {
+                  (c as LocalComic).read();
+                }
+              },
+              menuBuilder: (c) => singleLocalComicMenu(
+                  context, c as LocalComic, () => setState(() {})),
+            )
+          else ...[
+            if (arrangeMode)
+              SliverToBoxAdapter(
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: context.colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.drag_indicator),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text("Long press and drag to reorder.".tl),
                       ),
-                      onChanged: (v) {
-                        keyword = v;
-                        update();
+                    ],
+                  ),
+                ),
+              ),
+            SliverToBoxAdapter(
+              child: _SectionHeader(title: "Categories".tl),
+            ),
+            if (folders.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    "No comics".tl,
+                    style: TextStyle(color: context.colorScheme.outline),
+                  ),
+                ),
+              )
+            else if (arrangeMode)
+              SliverReorderableList(
+                itemCount: folders.length,
+                onReorder: (oldIndex, newIndex) {
+                  if (oldIndex < newIndex) {
+                    newIndex--;
+                  }
+                  setState(() {
+                    var item = folders.removeAt(oldIndex);
+                    folders.insert(newIndex, item);
+                  });
+                  LocalManager().reorderFolders(folders);
+                },
+                itemBuilder: (context, index) {
+                  var folder = folders[index];
+                  var comics = folderComics[folder] ?? [];
+                  return _FolderSection(
+                    key: ValueKey(folder),
+                    folder: folder,
+                    comics: comics,
+                    index: index,
+                    arrangeMode: true,
+                    onTapHeader: () {},
+                    onLongPressHeader: (location) {},
+                    onRead: (comic) {},
+                    onLongPressComic: (comic, location) {},
+                    onMoveToFolder: (comic) => _moveToFolder(comic, folder),
+                    onReorder: _persistReorder,
+                    onDragStarted: () => _skipNextReorder = false,
+                  );
+                },
+              )
+            else
+              SliverList.builder(
+                itemCount: folders.length,
+                itemBuilder: (context, index) {
+                  var folder = folders[index];
+                  var comics = folderComics[folder] ?? [];
+                  return _FolderSection(
+                    folder: folder,
+                    comics: comics,
+                    index: index,
+                    arrangeMode: false,
+                    onTapHeader: () {
+                      context.to(() => LocalFolderPage(folder: folder));
+                    },
+                    onLongPressHeader: (location) =>
+                        _showFolderMenuAt(folder, location),
+                    onRead: (comic) => comic.read(),
+                    onLongPressComic: (comic, location) {
+                      showMenuX(
+                        App.rootContext,
+                        location,
+                        singleLocalComicMenu(
+                            context, comic, () => setState(() {})),
+                      );
+                    },
+                    onMoveToFolder: (comic) {},
+                    onReorder: (list) {},
+                    onDragStarted: () {},
+                  );
+                },
+              ),
+            SliverToBoxAdapter(
+              child: arrangeMode
+                  ? ComicDropTarget(
+                      accept: (c) =>
+                          c.folder != LocalManager.uncategorizedFolder,
+                      onAccept: (comic) => _moveToFolder(
+                          comic, LocalManager.uncategorizedFolder),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _UncategorizedHeader(count: uncategorized.length),
+                          if (uncategorized.isNotEmpty)
+                            ReorderableBuilder<LocalComic>.builder(
+                              enableScrollingWhileDragging: false,
+                              onDragStarted: (_) {
+                                _skipNextReorder = false;
+                                localComicDragActive.value = true;
+                              },
+                              onDragEnd: (_) =>
+                                  localComicDragActive.value = false,
+                              onReorder: (reorderFunc) {
+                                _persistReorder(reorderFunc(uncategorized));
+                              },
+                              childBuilder: (itemBuilder) {
+                                return GridView.builder(
+                                  key: _uncatGridKey,
+                                  shrinkWrap: true,
+                                  physics:
+                                      const NeverScrollableScrollPhysics(),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8),
+                                  gridDelegate:
+                                      SliverGridDelegateWithComics(),
+                                  itemCount: uncategorized.length,
+                                  itemBuilder: (context, index) {
+                                    var comic = uncategorized[index];
+                                    return itemBuilder(
+                                      CustomDraggable(
+                                        key: ValueKey(
+                                            "${comic.id}-${comic.comicType.value}"),
+                                        data: comic,
+                                        child: Stack(
+                                          fit: StackFit.expand,
+                                          children: [
+                                            ComicTile(
+                                              comic: comic,
+                                              enableLongPressed: false,
+                                              onTap: () {},
+                                            ),
+                                            const Positioned(
+                                              right: 6,
+                                              bottom: 6,
+                                              child: ComicHandleHint(),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      index,
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    )
+                  : _UncategorizedHeader(
+                      count: uncategorized.length,
+                      onTap: () {
+                        context.to(() => LocalFolderPage(
+                            folder: LocalManager.uncategorizedFolder));
                       },
                     ),
-              actions: multiSelectMode ? selectActions : null,
             ),
-          SliverGridComics(
-            comics: comics,
-            selections: selectedComics,
-            onLongPressed: (c, heroID) {
-              setState(() {
-                multiSelectMode = true;
-                selectedComics[c as LocalComic] = true;
-              });
-            },
-            onTap: (c, heroID) {
-              if (multiSelectMode) {
-                setState(() {
-                  if (selectedComics.containsKey(c as LocalComic)) {
-                    selectedComics.remove(c);
-                  } else {
-                    selectedComics[c] = true;
-                  }
-                  if (selectedComics.isEmpty) {
-                    multiSelectMode = false;
-                  }
-                });
-              } else {
-                // prevent dirty data
-                var comic =
-                    LocalManager().find(c.id, ComicType.fromKey(c.sourceKey))!;
-                comic.read();
-              }
-            },
-            menuBuilder: (c) {
-              return [
-                MenuEntry(
-                  icon: Icons.folder_open,
-                  text: "Open Folder".tl,
-                  onClick: () {
-                    openComicFolder(c as LocalComic);
-                  },
-                ),
-                MenuEntry(
-                  icon: Icons.delete,
-                  text: "Delete".tl,
-                  onClick: () {
-                    deleteComics([c as LocalComic]).then((value) {
-                      if (value && multiSelectMode) {
-                        setState(() {
-                          multiSelectMode = false;
-                          selectedComics.clear();
-                        });
+            if (!arrangeMode)
+              SliverGridComics(
+                comics: uncategorized,
+                selections: multiSelectMode ? selectedComics : null,
+                onLongPressed: (c, heroID) {
+                  setState(() {
+                    multiSelectMode = true;
+                    selectedComics[c as LocalComic] = true;
+                  });
+                },
+                onTap: (c, heroID) {
+                  if (multiSelectMode) {
+                    setState(() {
+                      if (selectedComics.containsKey(c as LocalComic)) {
+                        selectedComics.remove(c);
+                      } else {
+                        selectedComics[c] = true;
+                      }
+                      if (selectedComics.isEmpty) {
+                        multiSelectMode = false;
                       }
                     });
-                  },
-                ),
-                ...exportActions([c as LocalComic]),
-              ];
-            },
-          ),
+                  } else {
+                    (c as LocalComic).read();
+                  }
+                },
+                menuBuilder: (c) => singleLocalComicMenu(
+                    context, c as LocalComic, () => setState(() {})),
+              ),
+          ],
         ],
+        ),
       ),
     );
 
     return PopScope(
-      canPop: !multiSelectMode && !searchMode,
+      canPop: !multiSelectMode && !searchMode && !arrangeMode,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         if (multiSelectMode) {
-          setState(() {
-            multiSelectMode = false;
-            selectedComics.clear();
-          });
+          exitMultiSelect();
+        } else if (arrangeMode) {
+          exitArrange();
         } else if (searchMode) {
           setState(() {
             searchMode = false;
@@ -374,265 +553,401 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
     );
   }
 
-  Future<bool> deleteComics(List<LocalComic> comics) async {
-    bool isDeleted = false;
-    await showDialog(
-      context: App.rootContext,
-      builder: (context) {
-        bool removeComicFile = true;
-        bool removeFavoriteAndHistory = true;
-        return StatefulBuilder(builder: (context, state) {
-          return ContentDialog(
-            title: "Delete".tl,
-            content: Column(
-              children: [
-                CheckboxListTile(
-                  title: Text("Remove local favorite and history".tl),
-                  value: removeFavoriteAndHistory,
-                  onChanged: (v) {
-                    state(() {
-                      removeFavoriteAndHistory = !removeFavoriteAndHistory;
-                    });
-                  },
-                ),
-                CheckboxListTile(
-                  title: Text("Also remove files on disk".tl),
-                  value: removeComicFile,
-                  onChanged: (v) {
-                    state(() {
-                      removeComicFile = !removeComicFile;
-                    });
-                  },
-                )
-              ],
-            ),
-            actions: [
-              if (comics.length == 1 && comics.first.hasChapters)
-                TextButton(
-                  child: Text("Delete Chapters".tl),
-                  onPressed: () {
-                    context.pop();
-                    showDeleteChaptersPopWindow(context, comics.first);
-                  },
-                ),
-              FilledButton(
-                onPressed: () {
-                  context.pop();
-                  LocalManager().batchDeleteComics(
-                    comics,
-                    removeComicFile,
-                    removeFavoriteAndHistory,
-                  );
-                  isDeleted = true;
-                },
-                child: Text("Confirm".tl),
-              ),
-            ],
-          );
-        });
-      },
-    );
-    return isDeleted;
-  }
-
-  List<MenuEntry> exportActions(List<LocalComic> comics) {
-    return [
+  void _showFolderMenuAt(String folder, Offset location) {
+    showMenuX(App.rootContext, location, [
       MenuEntry(
-        icon: Icons.outbox_outlined,
-        text: "Export as cbz".tl,
+        icon: Icons.edit_outlined,
+        text: "Rename".tl,
         onClick: () {
-          exportComics(comics, CBZ.export, ".cbz");
+          showRenameFolderDialog(context, folder);
         },
       ),
       MenuEntry(
-        icon: Icons.picture_as_pdf_outlined,
-        text: "Export as pdf".tl,
-        onClick: () async {
-          exportComics(comics, createPdfFromComicIsolate, ".pdf");
+        icon: Icons.delete_outline,
+        text: "Delete Category".tl,
+        onClick: () {
+          _confirmDeleteFolder(folder);
         },
       ),
-      MenuEntry(
-        icon: Icons.import_contacts_outlined,
-        text: "Export as epub".tl,
-        onClick: () async {
-          exportComics(comics, createEpubWithLocalComic, ".epub");
-        },
-      )
-    ];
+    ]);
   }
 
-  /// Export given comics to a file
-  void exportComics(
-      List<LocalComic> comics, ExportComicFunc export, String ext) async {
-    var current = 0;
-    var cacheDir = FilePath.join(App.cachePath, 'comics_export');
-    var outFile = FilePath.join(App.cachePath, 'comics_export.zip');
-    bool canceled = false;
-    if (Directory(cacheDir).existsSync()) {
-      Directory(cacheDir).deleteSync(recursive: true);
-    }
-    Directory(cacheDir).createSync();
-    var loadingController = showLoadingDialog(
-      context,
-      allowCancel: true,
-      message: "${"Exporting".tl} $current/${comics.length}",
-      withProgress: comics.length > 1,
-      onCancel: () {
-        canceled = true;
-      },
+  void _confirmDeleteFolder(String folder) {
+    showDialog(
+      context: context,
+      builder: (context) => ContentDialog(
+        title: "Delete Category".tl,
+        content: Text("Delete category '@f' ?".tlParams({'f': folder})),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              context.pop();
+              LocalManager().deleteFolder(folder);
+            },
+            child: Text("Confirm".tl),
+          ),
+        ],
+      ),
     );
-    try {
-      var fileName = "";
-      // For each comic, export it to a file
-      for (var comic in comics) {
-        fileName = FilePath.join(
-          cacheDir,
-          sanitizeFileName(comic.title, maxLength: 100) + ext,
-        );
-        await export(comic, fileName);
-        current++;
-        if (comics.length > 1) {
-          loadingController
-              .setMessage("${"Exporting".tl} $current/${comics.length}");
-          loadingController.setProgress(current / comics.length);
-        }
-        if (canceled) {
-          return;
-        }
-      }
-      // For single comic, just save the file
-      if (comics.length == 1) {
-        await saveFile(
-          file: File(fileName),
-          filename: File(fileName).name,
-        );
-        Directory(cacheDir).deleteSync(recursive: true);
-        loadingController.close();
-        return;
-      }
-      // For multiple comics, compress the folder
-      loadingController.setProgress(null);
-      loadingController.setMessage("Compressing".tl);
-      await ZipFile.compressFolderAsync(cacheDir, outFile);
-      if (canceled) {
-        File(outFile).deleteIgnoreError();
-        return;
-      }
-    } catch (e, s) {
-      Log.error("Export Comics", e, s);
-      context.showMessage(message: e.toString());
-      loadingController.close();
-      return;
-    } finally {
-      Directory(cacheDir).deleteIgnoreError(recursive: true);
-    }
-    await saveFile(
-      file: File(outFile),
-      filename: "comics_export.zip",
-    );
-    loadingController.close();
-    File(outFile).deleteIgnoreError();
   }
 }
 
-typedef ExportComicFunc = Future<File> Function(
-    LocalComic comic, String outFilePath);
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title});
 
-/// Opens the folder containing the comic in the system file explorer
-Future<void> openComicFolder(LocalComic comic) async {
-  try {
-    final folderPath = comic.baseDir;
+  final String title;
 
-    if (App.isWindows) {
-      await Process.run('explorer', [folderPath]);
-    } else if (App.isMacOS) {
-      await Process.run('open', [folderPath]);
-    } else if (App.isLinux) {
-      // Try different file managers commonly found on Linux
-      try {
-        await Process.run('xdg-open', [folderPath]);
-      } catch (e) {
-        // Fallback to other common file managers
-        try {
-          await Process.run('nautilus', [folderPath]);
-        } catch (e) {
-          try {
-            await Process.run('dolphin', [folderPath]);
-          } catch (e) {
-            try {
-              await Process.run('thunar', [folderPath]);
-            } catch (e) {
-              // Last resort: use the URL launcher with file:// protocol
-              await launchUrlString('file://$folderPath');
-            }
-          }
-        }
-      }
-    } else {
-      // For mobile platforms, use the URL launcher with file:// protocol
-      await launchUrlString('file://$folderPath');
-    }
-  } catch (e, s) {
-    Log.error("Open Folder", "Failed to open comic folder: $e", s);
-    // Show error message to user
-    if (App.rootContext.mounted) {
-      App.rootContext.showMessage(message: "Failed to open folder: $e");
-    }
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
-void showDeleteChaptersPopWindow(BuildContext context, LocalComic comic) {
-  var chapters = <String>[];
+class _UncategorizedHeader extends StatelessWidget {
+  const _UncategorizedHeader({required this.count, this.onTap});
 
-  showPopUpWidget(
-    context,
-    PopUpWidgetScaffold(
-      title: "Delete Chapters".tl,
-      body: StatefulBuilder(builder: (context, setState) {
-        return Column(
+  final int count;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    var row = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              "Uncategorized".tl,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: context.colorScheme.secondaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              count.toString(),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          if (onTap != null) const Icon(Icons.arrow_right),
+        ],
+      ),
+    );
+    if (onTap == null) {
+      return row;
+    }
+    return InkWell(onTap: onTap, child: row);
+  }
+}
+
+/// A category rendered as a titled, horizontally scrollable cover strip.
+class _FolderSection extends StatelessWidget {
+  const _FolderSection({
+    super.key,
+    required this.folder,
+    required this.comics,
+    required this.index,
+    required this.arrangeMode,
+    required this.onTapHeader,
+    required this.onLongPressHeader,
+    required this.onRead,
+    required this.onLongPressComic,
+    required this.onMoveToFolder,
+    required this.onReorder,
+    required this.onDragStarted,
+  });
+
+  final String folder;
+  final List<LocalComic> comics;
+  final int index;
+  final bool arrangeMode;
+  final VoidCallback onTapHeader;
+  final void Function(Offset location) onLongPressHeader;
+  final void Function(LocalComic comic) onRead;
+  final void Function(LocalComic comic, Offset location) onLongPressComic;
+  final void Function(LocalComic comic) onMoveToFolder;
+  final void Function(List<LocalComic> list) onReorder;
+  final VoidCallback onDragStarted;
+
+  @override
+  Widget build(BuildContext context) {
+    if (arrangeMode) {
+      return ComicDropTarget(
+        accept: (c) => c.folder != folder,
+        onAccept: onMoveToFolder,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: ListView.builder(
-                itemCount: comic.downloadedChapters.length,
-                itemBuilder: (context, index) {
-                  var id = comic.downloadedChapters[index];
-                  var chapter = comic.chapters![id] ?? "Unknown Chapter";
-                  return CheckboxListTile(
-                    title: Text(chapter),
-                    value: chapters.contains(id),
-                    onChanged: (v) {
-                      setState(() {
-                        if (v == true) {
-                          chapters.add(id);
-                        } else {
-                          chapters.remove(id);
-                        }
-                      });
-                    },
-                  );
-                },
+            _buildArrangeHeader(context),
+            if (comics.isEmpty)
+              SizedBox(
+                height: 136,
+                child: Center(
+                  child: Text(
+                    "No comics".tl,
+                    style: TextStyle(color: context.colorScheme.outline),
+                  ),
+                ),
+              )
+            else
+              _CategoryStrip(
+                comics: comics,
+                onDragStarted: onDragStarted,
+                onReorder: onReorder,
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildNormalHeader(context),
+        if (comics.isEmpty)
+          SizedBox(
+            height: 136,
+            child: Center(
+              child: Text(
+                "No comics".tl,
+                style: TextStyle(color: context.colorScheme.outline),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  FilledButton(
-                    onPressed: () {
-                      Future.delayed(const Duration(milliseconds: 200), () {
-                        LocalManager().deleteComicChapters(comic, chapters);
-                      });
-                      App.rootContext.pop();
-                    },
-                    child: Text("Submit".tl),
-                  )
-                ],
+          )
+        else
+          SizedBox(
+            height: 136,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: comics.length,
+              itemBuilder: (context, i) {
+                var comic = comics[i];
+                return _FolderComicTile(
+                  comic: comic,
+                  onTap: () => onRead(comic),
+                  onLongPress: (location) => onLongPressComic(comic, location),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildNormalHeader(BuildContext context) {
+    var row = _headerRow(context, showHandle: false);
+    return Builder(builder: (headerContext) {
+      return InkWell(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+        onTap: onTapHeader,
+        onLongPress: () {
+          var box = headerContext.findRenderObject() as RenderBox;
+          var size = box.size;
+          onLongPressHeader(
+            box.localToGlobal(Offset(size.width / 2, size.height / 2)),
+          );
+        },
+        child: row,
+      );
+    });
+  }
+
+  Widget _buildArrangeHeader(BuildContext context) {
+    return _headerRow(context, showHandle: true);
+  }
+
+  Widget _headerRow(BuildContext context, {required bool showHandle}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      child: Row(
+        children: [
+          if (showHandle)
+            ReorderableDragStartListener(
+              index: index,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.drag_indicator, size: 22),
               ),
             )
-          ],
-        );
-      }),
-    ),
-  );
+          else
+            const SizedBox(width: 4),
+          const Icon(Icons.folder_outlined, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              folder,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: context.colorScheme.secondaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              comics.length.toString(),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          if (!showHandle) const Icon(Icons.arrow_right),
+        ],
+      ),
+    );
+  }
+}
+
+/// A horizontally reorderable cover strip for one category (arrange mode).
+class _CategoryStrip extends StatefulWidget {
+  const _CategoryStrip({
+    required this.comics,
+    required this.onDragStarted,
+    required this.onReorder,
+  });
+
+  final List<LocalComic> comics;
+  final VoidCallback onDragStarted;
+  final void Function(List<LocalComic> list) onReorder;
+
+  @override
+  State<_CategoryStrip> createState() => _CategoryStripState();
+}
+
+class _CategoryStripState extends State<_CategoryStrip> {
+  final _controller = ScrollController();
+  final _gridKey = GlobalKey();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 136,
+      child: DragAutoScroller(
+        controller: _controller,
+        child: ReorderableBuilder<LocalComic>.builder(
+          scrollController: _controller,
+          enableScrollingWhileDragging: false,
+          onDragStarted: (_) {
+            localComicDragActive.value = true;
+            widget.onDragStarted();
+          },
+          onDragEnd: (_) => localComicDragActive.value = false,
+          onReorder: (reorderFunc) {
+            widget.onReorder(reorderFunc(widget.comics));
+          },
+          childBuilder: (itemBuilder) {
+            return GridView.builder(
+              key: _gridKey,
+              controller: _controller,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 1,
+                mainAxisExtent: 106,
+              ),
+              itemCount: widget.comics.length,
+              itemBuilder: (context, index) {
+                var comic = widget.comics[index];
+                return itemBuilder(
+                  CustomDraggable(
+                    key: ValueKey("${comic.id}-${comic.comicType.value}"),
+                    data: comic,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _FolderComicTile(comic: comic),
+                        const Positioned(
+                          right: 4,
+                          bottom: 4,
+                          child: ComicHandleHint(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  index,
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// A single cover in a category strip. Tap to read, long press for the menu.
+class _FolderComicTile extends StatelessWidget {
+  const _FolderComicTile({
+    required this.comic,
+    this.onTap,
+    this.onLongPress,
+  });
+
+  final LocalComic comic;
+  final VoidCallback? onTap;
+  final void Function(Offset location)? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Builder(builder: (tileContext) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          onLongPress: onLongPress == null
+              ? null
+              : () {
+                  var box = tileContext.findRenderObject() as RenderBox;
+                  var size = box.size;
+                  onLongPress!(
+                    box.localToGlobal(Offset(size.width / 2, size.height / 2)),
+                  );
+                },
+          child: Container(
+            width: 98,
+            height: 136,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: context.colorScheme.secondaryContainer,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: AnimatedImage(
+              image: LocalComicImageProvider(comic),
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.medium,
+            ),
+          ),
+        ),
+      );
+    });
+  }
 }

@@ -69,14 +69,7 @@ class _AboutSettingsState extends State<AboutSettings> {
           title: const Text("Github"),
           trailing: const Icon(Icons.open_in_new),
           onTap: () {
-            launchUrlString("https://github.com/venera-app/venera");
-          },
-        ).toSliver(),
-        ListTile(
-          title: const Text("Telegram"),
-          trailing: const Icon(Icons.open_in_new),
-          onTap: () {
-            launchUrlString("https://t.me/venera_release");
+            launchUrlString("https://github.com/SKYL1NE-34/venera");
           },
         ).toSliver(),
       ],
@@ -86,7 +79,7 @@ class _AboutSettingsState extends State<AboutSettings> {
 
 Future<bool> checkUpdate() async {
   var res = await AppDio()
-      .get("https://cdn.jsdelivr.net/gh/venera-app/venera@master/pubspec.yaml");
+      .get("https://cdn.jsdelivr.net/gh/SKYL1NE-34/venera@master/pubspec.yaml");
   if (res.statusCode == 200) {
     var data = loadYaml(res.data);
     if (data["version"] != null) {
@@ -117,7 +110,7 @@ Future<void> checkUpdateUi([bool showMessageIfNoUpdate = true, bool delay = fals
                   onPressed: () {
                     Navigator.pop(context);
                     launchUrlString(
-                        "https://github.com/venera-app/venera/releases");
+                        "https://github.com/SKYL1NE-34/venera/releases");
                   },
                   child: Text("Update".tl),
                 ),

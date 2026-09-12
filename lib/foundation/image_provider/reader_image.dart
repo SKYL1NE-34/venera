@@ -45,7 +45,9 @@ class ReaderImageProvider
           cumulativeBytesLoaded: event.currentBytes,
           expectedTotalBytes: event.totalBytes,
         ));
-        if (event.imageBytes != null) {
+        // Skip empty payloads (e.g. an empty cache file) and wait for the
+        // actual downloaded bytes.
+        if (event.imageBytes != null && event.imageBytes!.isNotEmpty) {
           imageBytes = event.imageBytes;
           break;
         }
