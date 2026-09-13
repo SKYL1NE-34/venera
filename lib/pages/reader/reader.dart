@@ -270,6 +270,7 @@ class _ReaderState extends State<Reader>
 
   @override
   void dispose() {
+    _isDisposed = true;
     if (isFullscreen) {
       fullscreen();
     }
@@ -440,6 +441,10 @@ abstract mixin class _ImagePerPageHandler {
   /// Get images list for calculating maxPage
   List<String>? get images;
 
+  /// Clears any pending page animation target (implemented by
+  /// [_ReaderLocation]).
+  void clearPendingPage();
+
   void initImagesPerPage(int initialPage) {
     _lastImagesPerPage = imagesPerPage;
     _lastOrientation = isPortrait;
@@ -537,7 +542,11 @@ abstract mixin class _ImagePerPageHandler {
 
     // Clamp to valid range (1 to maxPage)
     newPage = newPage.clamp(1, maxPage);
-    
+
+    // Drop any pending page animation so it won't chain back after the
+    // images-per-page change.
+    clearPendingPage();
+
     // If we were on the comments page, stay on the comments page
     if (_wasOnCommentsPage) {
       page = maxPage + 1;
@@ -593,6 +602,10 @@ abstract mixin class _ReaderLocation {
   int _page = 1;
   int? _pendingPage;
 
+  /// Set to true when the reader state is disposed, so pending animation
+  /// callbacks don't touch a disposed widget.
+  bool _isDisposed = false;
+
   /// Flag to indicate that the page should jump to the last page after images are loaded.
   bool _jumpToLastPageOnLoad = false;
 
@@ -639,17 +652,27 @@ abstract mixin class _ReaderLocation {
     return page >= 1 && page <= totalPages;
   }
 
+  /// Page used as the base for next/prev navigation. While a page animation is
+  /// running, [page] is still the old value, so use the pending target to let
+  /// rapid key presses advance one page at a time.
+  int get _navigationBasePage =>
+      (_animationCount > 0 && _pendingPage != null) ? _pendingPage! : page;
+
   /// Returns true if the page is changed
   bool toNextPage() {
-    return toPage(page + 1);
+    return toPage(_navigationBasePage + 1);
   }
 
   /// Returns true if the page is changed
   bool toPrevPage() {
-    return toPage(page - 1);
+    return toPage(_navigationBasePage - 1);
   }
 
   int _animationCount = 0;
+
+  /// Incremented on every page navigation request. Used to invalidate the
+  /// fallback jump of a superseded request.
+  int _navToken = 0;
 
   bool toPage(int page) {
     if (_validatePage(page)) {
@@ -660,14 +683,47 @@ abstract mixin class _ReaderLocation {
       if (hasAnimation) {
         _pendingPage = page;
         _animationCount++;
+        final token = ++_navToken;
         update();
-        _imageViewController!.animateToPage(page).then((_) {
+        var done = false;
+        void finish() {
+          if (done) {
+            return;
+          }
+          done = true;
           _animationCount--;
           if (_pendingPage == page) {
             _pendingPage = null;
           }
+          if (_isDisposed) {
+            return;
+          }
           update();
-        });
+          // Fallback: the continuous-mode transition scroll can silently fail
+          // (leaving the package's transition state stuck). If this was the
+          // latest request and the page didn't actually move, jump directly.
+          if (token == _navToken) {
+            Future.delayed(const Duration(milliseconds: 30), () {
+              if (_isDisposed || token != _navToken) {
+                return;
+              }
+              if (this.page != page) {
+                _imageViewController?.toPage(page);
+              }
+            });
+          }
+        }
+
+        try {
+          _imageViewController!.animateToPage(page).then(
+            (_) => finish(),
+            onError: (e) => finish(),
+          );
+        } catch (e) {
+          finish();
+        }
+        // Watchdog: recover even if the animation future never completes.
+        Timer(const Duration(milliseconds: 1200), finish);
       } else {
         this.page = page;
         update();
@@ -676,6 +732,27 @@ abstract mixin class _ReaderLocation {
       return true;
     }
     return false;
+  }
+
+  /// Jumps to [page] immediately without animation. Used by the reader slider
+  /// while dragging so the displayed page follows the finger synchronously.
+  void toPageImmediate(int page) {
+    if (!_validatePage(page)) {
+      return;
+    }
+    // Cancel any pending animation target so a running animation won't chain
+    // back to a stale page.
+    _pendingPage = null;
+    _navToken++;
+    this.page = page;
+    update();
+    _imageViewController!.toPage(page);
+  }
+
+  /// Clears any pending page animation target.
+  void clearPendingPage() {
+    _pendingPage = null;
+    _navToken++;
   }
 
   bool get isPageAnimating => _animationCount > 0;
@@ -698,6 +775,9 @@ abstract mixin class _ReaderLocation {
   bool toChapter(int c, {bool toLastPage = false}) {
     if (_validateChapter(c) && !isLoading) {
       chapter = c;
+      // Drop any pending page animation so it won't chain back after the
+      // chapter changed.
+      _pendingPage = null;
       page = 1;
       _jumpToLastPageOnLoad = toLastPage;
       update();

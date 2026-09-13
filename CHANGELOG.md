@@ -4,6 +4,38 @@
 >
 > This repository is an unofficial fork of [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0). All notable changes to this fork are documented in this file.
 
+## [1.6.6] - 2026-09-14
+
+### 修复
+
+- 阅读器：拖动进度条后偶发无法点击页面收起菜单（`_animationCount` 泄漏导致内容被 `AbsorbPointer` 永久吸收）；动画异常或 future 卡死时计数也会被强制归零（try/catch + 看门狗）
+- 阅读器：连续模式下用音量键翻页几页后卡住不动（第三方过渡滚动未搬动内容）——增加兜底：目标页未生效时直接跳转并复位滚动状态
+- 阅读器：连续按键翻页时以"待到达的目标页"为基准，避免连续按键都算到同一页
+- 阅读器：换章 / 切换每页图片数时可能跳回旧目标页
+
+### 变更
+
+- 拖动阅读进度条时页面立即跳转（同步跟随手指），松手后正常；拖动过程不再产生重叠动画
+
+### 已知限制
+
+- 连续模式的翻页过渡动画来自第三方库 `scrollable_positioned_list`，偶发不搬动内容；已用兜底跳转保证功能可用，动画成功率的改进列为后续计划
+
+### Fixed
+
+- Reader: after dragging the page slider, tapping the page could occasionally fail to close the menu (a leaked `_animationCount` made `AbsorbPointer` swallow all taps). The counter is now force-reset on error or a stuck future (try/catch + watchdog).
+- Reader: in continuous mode, volume-key page turns could get stuck after a few pages (the third-party transition scroll did not move the content). Added a fallback that jumps directly and resets the scroll state when the target page did not take effect.
+- Reader: next/prev navigation now uses the pending target page while an animation runs, so rapid key presses advance one page at a time.
+- Reader: fixed a possible jump back to a stale page when changing chapter or images-per-page.
+
+### Changed
+
+- Dragging the reader slider now jumps the page immediately (follows the finger), and no longer spawns overlapping animations.
+
+### Known limitation
+
+- The continuous-mode page transition animation comes from the third-party `scrollable_positioned_list`; it occasionally fails to move the content. A fallback jump keeps navigation working; improving the animation success rate is planned as future work.
+
 ## [1.6.5] - 2026-09-13
 
 ### 修复

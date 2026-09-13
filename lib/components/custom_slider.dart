@@ -70,7 +70,7 @@ class _SliderDefaultsM3 extends SliderThemeData {
 }
 
 class CustomSlider extends StatefulWidget {
-  const CustomSlider({required this.min, required this.max, required this.value, required this.divisions, required this.onChanged, required this.focusNode, this.reversed = false, super.key});
+  const CustomSlider({required this.min, required this.max, required this.value, required this.divisions, required this.onChanged, required this.focusNode, this.reversed = false, this.onChangeStart, this.onChangeEnd, super.key});
 
   final double min;
 
@@ -85,6 +85,12 @@ class CustomSlider extends StatefulWidget {
   final FocusNode? focusNode;
 
   final bool reversed;
+
+  /// Called when the user starts dragging the slider.
+  final void Function()? onChangeStart;
+
+  /// Called when the user stops dragging the slider.
+  final void Function()? onChangeEnd;
 
   @override
   State<CustomSlider> createState() => _CustomSliderState();
@@ -129,6 +135,9 @@ class _CustomSliderState extends State<CustomSlider> {
               var gapValue = (widget.max - widget.min)  / widget.divisions;
               widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
             },
+            onVerticalDragStart: (details) {
+              widget.onChangeStart?.call();
+            },
             onVerticalDragUpdate: (details){
               var dx = details.localPosition.dx;
               if(dx > constraints.maxWidth || dx < 0)  return;
@@ -138,6 +147,12 @@ class _CustomSliderState extends State<CustomSlider> {
               var gap = constraints.maxWidth / widget.divisions;
               var gapValue = (widget.max - widget.min)  / widget.divisions;
               widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
+            },
+            onVerticalDragEnd: (details) {
+              widget.onChangeEnd?.call();
+            },
+            onVerticalDragCancel: () {
+              widget.onChangeEnd?.call();
             },
             child: SizedBox(
               height: 24,

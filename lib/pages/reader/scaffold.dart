@@ -592,7 +592,10 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       reversed: isReversed,
       divisions: (context.reader.maxPage - 1).clamp(2, 1 << 16),
       onChanged: (i) {
-        context.reader.toPage(i.toInt());
+        context.reader.toPageImmediate(i.toInt());
+      },
+      onChangeEnd: () {
+        context.reader.toPage(context.reader.page);
       },
     );
   }
