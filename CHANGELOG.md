@@ -4,6 +4,20 @@
 >
 > This repository is an unofficial fork of [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0). All notable changes to this fork are documented in this file.
 
+## [1.6.5] - 2026-09-13
+
+### 修复
+
+- 关于页版本号现在显示真实的已安装版本（此前写死为 1.6.3）
+- "检查更新"不再误报：此前版本号写死，装了最新版仍提示有更新
+- "检查更新"现在也会比较构建号（版本名相同但构建号更高也能检测到）
+
+### Fixed
+
+- The About page now shows the real installed version (previously hardcoded to 1.6.3).
+- "Check for updates" no longer falsely reports an update when the latest version is installed.
+- "Check for updates" now also compares the build number (a higher build number with the same version name is detected).
+
 ## [1.6.4] - 2026-09-13
 
 ### 新增

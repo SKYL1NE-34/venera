@@ -83,7 +83,16 @@ Future<bool> checkUpdate() async {
   if (res.statusCode == 200) {
     var data = loadYaml(res.data);
     if (data["version"] != null) {
-      return _compareVersion(data["version"].split("+")[0], App.version);
+      var parts = data["version"].toString().split("+");
+      var remoteVersion = parts[0];
+      var remoteBuild = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+      if (_compareVersion(remoteVersion, App.version)) {
+        return true;
+      }
+      if (remoteVersion == App.version &&
+          remoteBuild > (int.tryParse(App.buildNumber) ?? 0)) {
+        return true;
+      }
     }
   }
   return false;
@@ -129,11 +138,14 @@ Future<void> checkUpdateUi([bool showMessageIfNoUpdate = true, bool delay = fals
 bool _compareVersion(String version1, String version2) {
   var v1 = version1.split(".");
   var v2 = version2.split(".");
-  for (var i = 0; i < v1.length; i++) {
-    if (int.parse(v1[i]) > int.parse(v2[i])) {
+  var length = v1.length > v2.length ? v1.length : v2.length;
+  for (var i = 0; i < length; i++) {
+    var n1 = i < v1.length ? int.tryParse(v1[i]) ?? 0 : 0;
+    var n2 = i < v2.length ? int.tryParse(v2[i]) ?? 0 : 0;
+    if (n1 > n2) {
       return true;
     }
-    if (int.parse(v1[i]) < int.parse(v2[i])) {
+    if (n1 < n2) {
       return false;
     }
   }

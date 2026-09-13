@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:venera/foundation/history.dart';
 
@@ -13,7 +14,12 @@ export "widget_utils.dart";
 export "context.dart";
 
 class _App {
-  final version = "1.6.3";
+  /// Version name of the installed app. Filled from the platform package info
+  /// during [init]. The initial value is only a fallback.
+  String version = "1.6.5";
+
+  /// Build number of the installed app (the part after `+` in pubspec).
+  String buildNumber = "";
 
   bool get isAndroid => Platform.isAndroid;
 
@@ -84,6 +90,13 @@ class _App {
     dataPath = (await getApplicationSupportDirectory()).path;
     if (isAndroid) {
       externalStoragePath = (await getExternalStorageDirectory())!.path;
+    }
+    try {
+      var info = await PackageInfo.fromPlatform();
+      version = info.version;
+      buildNumber = info.buildNumber;
+    } catch (e) {
+      debugPrint("Failed to read package info: $e");
     }
     isInitialized = true;
   }
