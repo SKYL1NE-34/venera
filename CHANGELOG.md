@@ -4,6 +4,36 @@
 >
 > This repository is an unofficial fork of [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0). All notable changes to this fork are documented in this file.
 
+## [1.6.7] - 2026-09-18
+
+### 新增
+
+- 启动画面：冷启动显示手写体 "Venera Air" 书写动画（跟随深浅色、主题色文字，写完停留约 0.4 秒后淡出）
+- 启动流程：Android 先挂载界面、后台初始化，减少冷启动白/黑屏
+
+### 修复
+
+- 冷启动原生窗口背景与启动页不一致导致的白色闪屏（NormalTheme 窗口背景对齐启动色）
+- 深链 / 分享文本在启动页期间到达时，因导航上下文未就绪可能失败（改为等待上下文就绪，超时兜底）
+
+### 变更
+
+- 内置 Dancing Script 手写字体（OFL 许可）
+
+### Added
+
+- Splash screen: handwriting "Venera Air" reveal animation on cold start (theme-aware, holds ~0.4s then fades out)
+- Startup: on Android the UI mounts first and initialization runs in the background, reducing the white/black cold-start screen
+
+### Fixed
+
+- White flash on cold start caused by the native window background not matching the splash (NormalTheme background aligned)
+- Deep links / shared text arriving during the splash could fail because the navigator was not ready (now waits for it with a timeout)
+
+### Changed
+
+- Bundled the Dancing Script handwriting font (OFL license)
+
 ## [1.6.6] - 2026-09-14
 
 ### 修复

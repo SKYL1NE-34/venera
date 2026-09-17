@@ -16,7 +16,7 @@ export "context.dart";
 class _App {
   /// Version name of the installed app. Filled from the platform package info
   /// during [init]. The initial value is only a fallback.
-  String version = "1.6.5";
+  String version = "1.6.7";
 
   /// Build number of the installed app (the part after `+` in pubspec).
   String buildNumber = "";
@@ -108,6 +108,24 @@ class _App {
       favorites.init(),
       local.init(),
     ]);
+  }
+
+  /// Wait until the main navigator (the home page) is mounted.
+  ///
+  /// Used by deep link / text share handlers that may fire while the app is
+  /// still bootstrapping and the home page is not available yet. Returns false
+  /// if it is still unavailable after [timeout].
+  Future<bool> waitForMainNavigator({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    var end = DateTime.now().add(timeout);
+    while (mainNavigatorKey?.currentContext == null) {
+      if (DateTime.now().isAfter(end)) {
+        return false;
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    return true;
   }
 
   Function? _forceRebuildHandler;

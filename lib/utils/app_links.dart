@@ -16,8 +16,8 @@ Future<bool> handleAppLink(Uri uri) async {
       if(source.linkHandler!.domains.contains(uri.host)) {
         var id = source.linkHandler!.linkToId(uri.toString());
         if(id != null) {
-          if(App.mainNavigatorKey == null) {
-            await Future.delayed(const Duration(milliseconds: 200));
+          if (!await App.waitForMainNavigator()) {
+            return false;
           }
           App.mainNavigatorKey!.currentContext?.to(() {
             return ComicPage(id: id, sourceKey: source.key);

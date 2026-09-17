@@ -12,8 +12,8 @@ void handleTextShare() async {
 
   var channel = EventChannel('venera/text_share');
   await for (var event in channel.receiveBroadcastStream()) {
-    if (App.mainNavigatorKey == null) {
-      await Future.delayed(const Duration(milliseconds: 200));
+    if (!await App.waitForMainNavigator()) {
+      continue;
     }
     if (event is String) {
       App.rootContext.to(() => AggregatedSearchPage(keyword: event));

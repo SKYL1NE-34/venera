@@ -2,12 +2,14 @@ import 'dart:async';
 import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flex_seed_scheme/flex_seed_scheme.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:venera/foundation/log.dart';
 import 'package:venera/pages/auth_page.dart';
 import 'package:venera/pages/main_page.dart';
+import 'package:venera/pages/splash_page.dart';
 import 'package:venera/utils/io.dart';
 import 'package:window_manager/window_manager.dart';
 import 'components/components.dart';
@@ -26,8 +28,15 @@ void main(List<String> args) {
   overrideIO(() {
     runZonedGuarded(() async {
       WidgetsFlutterBinding.ensureInitialized();
-      await init();
-      runApp(const MyApp());
+      if (App.isAndroid) {
+        // Mount the app immediately and run [init] in the background while the
+        // splash overlay is shown. This keeps the first frame fast and avoids
+        // showing the native (white/black) window background for long.
+        runApp(const MyApp(bootstrap: true));
+      } else {
+        await init();
+        runApp(const MyApp());
+      }
       if (App.isDesktop) {
         await windowManager.ensureInitialized();
         windowManager.waitUntilReadyToShow().then((_) async {
@@ -58,20 +67,109 @@ void main(List<String> args) {
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.bootstrap = false});
+
+  /// Whether the app was mounted before [init] finished. When true a splash
+  /// overlay is shown until initialization completes.
+  final bool bootstrap;
 
   @override
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+class _MyAppState extends State<MyApp>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+  /// Drives the home content. [MaterialApp.home] is cached by the navigator, so
+  /// the switch from the bootstrap placeholder to the real home page must be
+  /// driven by a listenable owned by a stable widget instead of rebuilding the
+  /// `home` property.
+  final ValueNotifier<bool> _readyNotifier = ValueNotifier(false);
+
+  /// How long the fully written name is held on screen before fading out.
+  /// Measured from the moment the writing animation completes so a slow
+  /// [init] does not add extra waiting time.
+  static const Duration _splashHoldDuration = Duration(milliseconds: 400);
+
+  bool _splashVisible = false;
+
+  double _splashOpacity = 1;
+
+  bool _holdDone = false;
+
+  Timer? _splashHoldTimer;
+
+  late final AnimationController _splashController;
+
   @override
   void initState() {
+    _readyNotifier.value = !widget.bootstrap;
     App.registerForceRebuild(forceRebuild);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     WidgetsBinding.instance.addObserver(this);
-    checkUpdates();
+    _splashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..addStatusListener(_onSplashAnimationStatus);
+    if (widget.bootstrap) {
+      _splashVisible = true;
+      _splashController.forward();
+      _bootstrap();
+    } else {
+      checkUpdates();
+    }
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    _splashHoldTimer?.cancel();
+    _splashController.dispose();
+    _readyNotifier.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Run the heavy initialization while the splash overlay is visible.
+  ///
+  /// Errors and a timeout are swallowed so the app still proceeds to the home
+  /// page instead of being stuck on the splash forever.
+  Future<void> _bootstrap() async {
+    try {
+      await init().timeout(const Duration(seconds: 10));
+    } catch (e, s) {
+      Log.error("init", "$e\n$s");
+    }
+    if (!mounted) return;
+    setState(() {});
+    _readyNotifier.value = true;
+    checkUpdates();
+    _maybeFinishSplash();
+  }
+
+  void _onSplashAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      _splashHoldTimer = Timer(_splashHoldDuration, () {
+        if (!mounted) return;
+        _holdDone = true;
+        _maybeFinishSplash();
+      });
+    }
+  }
+
+  void _maybeFinishSplash() {
+    if (!_splashVisible ||
+        !_readyNotifier.value ||
+        !_holdDone ||
+        !_splashController.isCompleted) {
+      return;
+    }
+    setState(() => _splashOpacity = 0);
+  }
+
+  void _onSplashFadeEnd() {
+    if (_splashOpacity == 0 && _splashVisible && mounted) {
+      setState(() => _splashVisible = false);
+    }
   }
 
   bool isAuthPageActive = false;
@@ -177,16 +275,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    Widget home;
-    if (appdata.settings['authorizationRequired']) {
-      home = AuthPage(
-        onSuccessfulAuth: () {
-          App.rootContext.toReplacement(() => const MainPage());
-        },
-      );
-    } else {
-      home = const MainPage();
-    }
     return DynamicColorBuilder(builder: (light, dark) {
       Color? primary, secondary, tertiary;
       if (appdata.settings['color'] != 'system' ||
@@ -200,7 +288,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       }
       return MaterialApp(
         title: "venera",
-        home: home,
+        home: _BootstrapGate(readyListenable: _readyNotifier),
         debugShowCheckedModeBanner: false,
         theme: getTheme(primary, secondary, tertiary, Brightness.light),
         navigatorKey: App.rootNavigatorKey,
@@ -278,6 +366,28 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 ),
               );
             }
+            if (_splashVisible) {
+              var theme = Theme.of(context);
+              widget = Stack(
+                children: [
+                  widget,
+                  Positioned.fill(
+                    child: AnimatedOpacity(
+                      opacity: _splashOpacity,
+                      duration: const Duration(milliseconds: 300),
+                      onEnd: _onSplashFadeEnd,
+                      child: SplashOverlay(
+                        animation: _splashController,
+                        background: theme.brightness == Brightness.dark
+                            ? const Color(0xFF121212)
+                            : const Color(0xFFFAFAFA),
+                        textColor: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
             return _SystemUiProvider(Material(
               color: App.isLinux ? Colors.transparent : null,
               child: widget,
@@ -287,6 +397,38 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         },
       );
     });
+  }
+}
+
+/// Switches the app home between a placeholder (while bootstrapping) and the
+/// real home page, driven by a [ValueListenable].
+///
+/// [MaterialApp.home] is only built once by the navigator, so this must be a
+/// stable widget that listens to [readyListenable] instead of rebuilding the
+/// `home` property.
+class _BootstrapGate extends StatelessWidget {
+  const _BootstrapGate({required this.readyListenable});
+
+  final ValueListenable<bool> readyListenable;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: readyListenable,
+      builder: (context, ready, _) {
+        if (!ready) {
+          return const SizedBox.shrink();
+        }
+        if (appdata.settings['authorizationRequired']) {
+          return AuthPage(
+            onSuccessfulAuth: () {
+              App.rootContext.toReplacement(() => const MainPage());
+            },
+          );
+        }
+        return const MainPage();
+      },
+    );
   }
 }
 
