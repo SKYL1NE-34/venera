@@ -41,6 +41,15 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
 
   final _scrollController = ScrollController();
 
+  /// A dedicated controller for the (non-scrolling) uncategorized grid.
+  ///
+  /// The grid lives inside the page's outer scroll view, but the reorder
+  /// package computes drop targets relative to the widget it wraps. Passing
+  /// this zero-offset controller makes those calculations grid-relative and
+  /// independent of the outer scroll position, so drag-reordering stays
+  /// accurate even while the page auto-scrolls mid-drag.
+  final _uncatGridController = ScrollController();
+
   List<LocalComic> get currentComics =>
       searchMode ? searchResults : uncategorized;
 
@@ -75,6 +84,7 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
   void dispose() {
     LocalManager().removeListener(update);
     _scrollController.dispose();
+    _uncatGridController.dispose();
     super.dispose();
   }
 
@@ -437,6 +447,7 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                           _UncategorizedHeader(count: uncategorized.length),
                           if (uncategorized.isNotEmpty)
                             ReorderableBuilder<LocalComic>.builder(
+                              scrollController: _uncatGridController,
                               enableScrollingWhileDragging: false,
                               onDragStarted: (_) {
                                 _skipNextReorder = false;
@@ -450,6 +461,7 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                               childBuilder: (itemBuilder) {
                                 return GridView.builder(
                                   key: _uncatGridKey,
+                                  controller: _uncatGridController,
                                   shrinkWrap: true,
                                   physics:
                                       const NeverScrollableScrollPhysics(),

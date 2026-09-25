@@ -4,6 +4,16 @@
 >
 > This repository is an unofficial fork of [venera-app/venera](https://github.com/venera-app/venera) (GPL-3.0). All notable changes to this fork are documented in this file.
 
+## [1.6.8] - 2026-09-26
+
+### 修复
+
+- 未分类漫画在整理模式下拖动排序时落点整体偏移，无法把漫画插入到两格之间；拖到分类上悬停再拖回时尤其明显（改用独立的零偏移滚动控制器，使拖拽落点始终与网格坐标一致，不再受页面滚动影响）
+
+### Fixed
+
+- Reorder drop position in the uncategorized grid was shifted while dragging, making it impossible to insert a comic between two other comics, especially after hovering over a category and dragging back (now uses a dedicated zero-offset scroll controller so drop positions stay aligned with the grid, unaffected by page scrolling)
+
 ## [1.6.7] - 2026-09-18
 
 ### 新增
